@@ -1,9 +1,8 @@
 import os
-import time
 import pandas as pd
 from src.constants import STARLINK_ASN, HURRICANE_ELECTRIC_ASN
 from data_collection.services_from_censys import get_censys_exposed_services
-from data_collection.run_scamper import Grouping, concurrent_ttl_ping_by_grouping, modified_concurrent_ttl_ping_by_grouping, modified_vs_naive_concurrent_ttl_ping_by_grouping, run_paris_trs
+from data_collection.run_scamper import Grouping, modified_concurrent_ttl_ping_by_grouping, run_paris_trs
 from data_collection.parse_scamper import get_last_hops_from_paris_tr
 
 """
