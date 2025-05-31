@@ -1,0 +1,7 @@
+pandas
+requests
+scipy
+pingouin
+censys
+google-cloud-bigquery
+db-dtypes
