@@ -1,6 +1,6 @@
 import pandas as pd
 import requests
-from .constants import IPINFO_TOKEN, STARLINK_ASN
+from .constants import IPINFO_TOKEN
 
 def get_asn(ip: str, token: str=IPINFO_TOKEN) -> str:
     req_str = f"https://api.ipinfo.io/lite/{ip}?token={token}"
