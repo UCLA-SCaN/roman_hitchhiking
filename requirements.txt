@@ -5,3 +5,4 @@ pingouin
 censys
 google-cloud-bigquery
 db-dtypes
+geopandas
