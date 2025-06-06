@@ -44,7 +44,7 @@ def plot_outage_length_cdf(
         )
 
     plt.xlabel('Outage Length (seconds)')
-    plt.ylabel('Cumulative Fraction\nof Outages')
+    plt.ylabel('Cumulative Fraction of\nOutages Across All Customers')
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.25), ncol=3)
     plt.ylim(0, 1)
     plt.xlim(5, None)

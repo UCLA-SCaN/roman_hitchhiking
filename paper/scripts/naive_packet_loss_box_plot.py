@@ -73,7 +73,7 @@ def packets_received_box_plot(
     plt.ylabel(f'Average Packet Loss (%)')
     plt.tight_layout()
     plt.show()
-    fig_name = f'{fig_output_dir}/packet_loss_perc_per_probe_seclast.png'
+    fig_name = f'{fig_output_dir}/naive_packet_loss_per_seclast.png'
     print(f'saving to {fig_name}')
     plt.savefig(fig_name)
 
