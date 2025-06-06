@@ -72,6 +72,7 @@ def plot_measurement_success_of_different_sampling_methods(
         output_dir: str,
         fig_name: str,
         labels: list[str] = None,
+        marker: bool = True,
 ):
     """
     Plot line graph of "valid" measurements different sample methods and sizes.
@@ -92,7 +93,7 @@ def plot_measurement_success_of_different_sampling_methods(
             df['frac'] * 100, 
             label=labels[ind] if labels else None, 
             color=colors[ind], 
-            marker='o',
+            marker='o' if marker else None,
             markersize=4,
         )
     plt.xlabel('Number of Customers Sampled from a Partition Group')
@@ -108,14 +109,16 @@ def plot_measurement_success_of_different_sampling_methods(
     plt.savefig(f'{output_dir}/{fig_name}.png')
 
     
-SUBNET_DIR = f"{PATH}/data/naive_partition/subnet"
+SUBNET_DIR = f"/home/mandat/leo-hitchhiking-tools/roman-hh-may16/sample_size"
+# SUBNET_DIR = f"{PATH}/data/naive_partition/subnet"
 subnet_failure_df = get_packet_loss_rate(
     SUBNET_DIR,
     SUBNET_DIR,
 )
 
 # --- SEC-LAST sample size
-SECLAST_DIR = f"{PATH}/data/naive_partition/seclast"
+SECLAST_DIR = "/home/mandat/leo-hitchhiking-tools/roman-hh-may16/seclast_size"
+# SECLAST_DIR = f"{PATH}/data/naive_partition/seclast"
 seclast_failure_df = get_packet_loss_rate(
     SECLAST_DIR,
     SECLAST_DIR,
@@ -137,6 +140,7 @@ plot_measurement_success_of_different_sampling_methods(
 )
 
 
+DATA_PATH = "/home/mandat/leo-hitchhiking-tools/roman-hh-may16/"
 MULTI_DIR = f"{DATA_PATH}/concurrent_multi_src"
 SINGLE_DIR = f"{DATA_PATH}/concurrent_single_src"
 ROMAN_MULTI_DIR = f"{DATA_PATH}/modified_concurrent_multi_src"
@@ -174,6 +178,7 @@ roman_multi_failure_df = get_packet_loss_rate(
 plot_measurement_success_of_different_sampling_methods(
     [single_failure_df, multi_failure_df, roman_single_failure_df, roman_multi_failure_df],
     FIG_OUTPUT_DIR,
-    "packet_loss_by_measurement_config.png"
+    "packet_loss_by_measurement_config",
     ['1 Source IP (Naive)', '8 Source IPs (Naive)', '1 Source IP (Roman)', '8 Source IPs (Roman)'],
+    marker=False,
 )
