@@ -11,7 +11,6 @@ Roman HitchHiking is based off of [LEO HitchHiking](https://github.com/stanford-
 Includes the scripts used to collect data using Roman-HitchHiking.
 - `run_roman_hitchhiking.py` -- an example script to collect data
 - `parse_scamper.py` -- parses scamper output to dataframe
-- `
 
 ### `paper`
 

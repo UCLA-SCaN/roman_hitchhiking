@@ -1,16 +1,17 @@
 import os
 import pandas as pd
-from src.constants import STARLINK_ASN, HURRICANE_ELECTRIC_ASN
-from data_collection.services_from_censys import get_censys_exposed_services
-from data_collection.run_scamper import Grouping, modified_concurrent_ttl_ping_by_grouping, run_paris_trs
-from data_collection.parse_scamper import get_last_hops_from_paris_tr
+from datetime import datetime
+from src.constants import STARLINK_ASN
+from services_from_censys import get_censys_exposed_services
+from run_scamper import Grouping, modified_concurrent_ttl_ping_by_grouping, run_paris_trs
+from parse_scamper import get_last_hops_from_paris_tr
 
 """
 Runs Roman HitchHiking
 """
 
 OUTPUT_DIR = "roman-hh"
-os.makedirs(OUTPUT_DIR)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def run_roman_hitchhiking(
         asn: str, 
@@ -49,10 +50,11 @@ def run_roman_hitchhiking(
         sec_to_last_df = pd.read_csv(sec_to_last_file)
     else:
         print(f"file doesn't exists: {paris_tr_file}.csv")
-        print("----running paris traceroutes")
-        paris_tr_df = run_paris_trs(censys_exposed_ips_file, f"{paris_tr_file}.json")
-        paris_tr_df.to_csv(f"{paris_tr_file}.csv")
-        print("----done running paris traceroutes")
+        if not os.path.exists(f"{paris_tr_file}.json"):
+            print("----running paris traceroutes")
+            paris_tr_df = run_paris_trs(censys_exposed_ips_file, f"{paris_tr_file}.json")
+            paris_tr_df.to_csv(f"{paris_tr_file}.csv")
+            print("----done running paris traceroutes")
         # find second-to-last hops
         sec_to_last_df = get_last_hops_from_paris_tr(f"{paris_tr_file}.json", asn)
         sec_to_last_df.to_csv(sec_to_last_file, index=None)
@@ -60,7 +62,8 @@ def run_roman_hitchhiking(
 
 
     # run roman hitchhiking
-    modified_concurrent_output_dir = f"{OUTPUT_DIR}/modified_all_may29"
+    date_str = datetime.now().strftime("%Y%m%d")
+    modified_concurrent_output_dir = f"{OUTPUT_DIR}/modified_all_{date_str}"
     os.makedirs(modified_concurrent_output_dir, exist_ok=True)
     modified_concurrent_file_name = f"{modified_concurrent_output_dir}/modified_concurrent_{asn}"
     if not os.path.exists(f"{modified_concurrent_file_name}_endpoint.csv") and \
@@ -84,4 +87,12 @@ def run_roman_hitchhiking(
         print(f"file exists: {modified_concurrent_file_name}")
 
 
-run_roman_hitchhiking(STARLINK_ASN)
+run_roman_hitchhiking(
+    STARLINK_ASN,
+    probe_interval=1, 
+    num_probes=60,  
+    multiple_src_ips=True, 
+    grouping=None, 
+    sample_size=None, 
+    slash=None,
+)

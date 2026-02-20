@@ -9,11 +9,12 @@ def get_asn(ip: str, token: str=IPINFO_TOKEN) -> str:
     try: 
         return data['asn']
     except KeyError as e:  # Catch the specific exception if the key is missing
-        print(f"KeyError: The key 'asn' was not found. Error: {e}")
+        print(f"KeyError: The key 'asn' was not found for ip {ip}. Error: {e}: {data}")
     except ValueError as e:  # You can still catch ValueError if needed, just for other cases
-        print(f"ValueError: {e}")
+        print(f"ValueError: {e}: {data}")
 
 def get_all_asn(presat_ips: list) -> pd.DataFrame:
+    print(presat_ips)
     asn_col = []
 
     for ip in presat_ips:

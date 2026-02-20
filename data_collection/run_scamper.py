@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from .parse_scamper import aggregate_data, paris_tr_to_df
+from parse_scamper import aggregate_data, paris_tr_to_df
 from collections import defaultdict
 from enum import Enum
 
@@ -30,7 +30,8 @@ def run_paris_trs(ip_file: str, output_file: str) -> pd.DataFrame:
     :param output_file: file path string to .json file to output traceroute data
     """
 
-    cmd_str = f"{scamper} -O json -o {output_file} -p 100 -c \"trace -P icmp-paris -q 1 \" {ip_file}"
+    cmd_str = f"{scamper} -O json -o {output_file} -p 200 -c \"trace -P icmp-paris -q 1 -g 15 \" {ip_file}"
+    print(cmd_str)
     try:
         subprocess.run(
                 cmd_str, 
@@ -60,10 +61,10 @@ def find_successful_ips(
 
 def modified_concurrent_ttl_ping_by_grouping(
         df: pd.DataFrame, asn: str, output_file: str, 
-        wait_probe: int = 1, num_probes: int = 60,
-        grouping: Grouping = None, 
-        sample_size: int = None, slash: int = None, 
-        multiple_src_ips: bool = False, src_ip: str = src_ips[0],
+        wait_probe: int, num_probes: int,
+        grouping: Grouping, 
+        sample_size: int, slash: int, 
+        multiple_src_ips: bool, src_ip: str = src_ips[0],
 ): 
     if grouping == Grouping.SUBNET and (sample_size is None or slash is None):
         raise ValueError("SUBNET grouping must be provided a 'sample_size' and 'slash'")
