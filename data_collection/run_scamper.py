@@ -1,4 +1,7 @@
 import ipaddress
+import itertools
+import threading
+import queue
 import os
 import pandas as pd
 import uuid
@@ -9,6 +12,7 @@ import time
 from parse_scamper import aggregate_data, paris_tr_to_df
 from collections import defaultdict
 from enum import Enum
+from config import SRC_IPS
 
 class Grouping(Enum):
     SUBNET = 1
@@ -60,33 +64,84 @@ def find_successful_ips(
     return df
 
 def modified_concurrent_ttl_ping_by_grouping(
-        df: pd.DataFrame, asn: str, output_file: str, 
-        wait_probe: int, num_probes: int,
-        grouping: Grouping, 
-        sample_size: int, slash: int, 
-        multiple_src_ips: bool, src_ip: str = src_ips[0],
-): 
+        df: pd.DataFrame,
+        asn: str,
+        output_file: str,
+        wait_probe: int,
+        num_probes: int,
+        grouping: Grouping,
+        sample_size: int,
+        slash: int,
+        multiple_src_ips: bool,
+        output_dir: str,
+        src_ip: str = SRC_IPS[0],
+):
+    def aggregation_worker():
+        nonlocal endpoint_header_written, seclast_header_written
+
+        while not stop_event.is_set() or not aggregation_queue.empty():
+            time.sleep(10)
+
+            batch = []
+            while not aggregation_queue.empty():
+                try:
+                    batch.append(aggregation_queue.get_nowait())
+                except queue.Empty:
+                    break
+
+            if not batch:
+                continue
+
+            endpoint_batch = [p for p in batch if p['type'] == 'endpoint']
+            seclast_batch = [p for p in batch if p['type'] == 'seclast']
+
+            if endpoint_batch:
+                df_batch = aggregate_data(endpoint_batch)
+                df_batch.to_csv(
+                    endpoint_output_file,
+                    mode='a',
+                    header=not endpoint_header_written,
+                    index=False
+                )
+                endpoint_header_written = True
+
+            if seclast_batch:
+                df_batch = aggregate_data(seclast_batch)
+                df_batch.to_csv(
+                    sec_last_output_file,
+                    mode='a',
+                    header=not seclast_header_written,
+                    index=False
+                )
+                seclast_header_written = True
+
+            # cleanup JSON immediately
+            for p in batch:
+                try:
+                    os.remove(p['output_file'])
+                except FileNotFoundError:
+                    pass
+
+    flush_interval = 10  # seconds
+
     if grouping == Grouping.SUBNET and (sample_size is None or slash is None):
         raise ValueError("SUBNET grouping must be provided a 'sample_size' and 'slash'")
 
     if grouping == Grouping.SECLAST and sample_size is None:
-        raise ValueError("SECLAS grouping must be provided a 'sample_size'")
+        raise ValueError("SECLAST grouping must be provided a 'sample_size'")
+
+    tmp_output_dir = os.path.join(output_dir, f"tmp_output_{asn}")
+    os.makedirs(tmp_output_dir, exist_ok=True)
 
     endpoint_ip_input_file = {}
     presat_ip_input_file = {}
 
-    output_dir = f"tmp_modified_concurrent_output_{asn}"
-    os.makedirs(output_dir, exist_ok=True)
-
     ###########################################################################
-    # Select `sample_size` IPs from each group
+    # Sampling
     ###########################################################################
     if grouping == Grouping.SUBNET:
-        df['subnet'] = (
-            df['dst']
-            .apply(
-                lambda x: ipaddress.IPv4Network(x + f"/{slash}", strict=False)
-            )
+        df['subnet'] = df['dst'].apply(
+            lambda x: ipaddress.IPv4Network(x + f"/{slash}", strict=False)
         )
         df_sampled = df.groupby('subnet', group_keys=False).head(sample_size)
     elif grouping == Grouping.SECLAST:
@@ -95,66 +150,7 @@ def modified_concurrent_ttl_ping_by_grouping(
         df_sampled = df
 
     ###########################################################################
-    # Find if expected sec-last hop is actual sec-last hop
-    ###########################################################################
-    verify_seclast_hop_input_files = {}
-    verify_seclast_hop_output_files = []
-    procs = []
-    df_grouped_hop = (
-        df_sampled
-        .groupby('sec_last_hop')['dst']
-        .apply(set)
-        .reset_index()
-    )
-
-    for index, row in df_grouped_hop.iterrows():
-        ips = row['dst']
-        hop = int(row['sec_last_hop'])
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_ip_file:
-            verify_seclast_hop_input_files[hop] = tmp_ip_file.name
-            tmp_ip_file.flush()
-            for ip in ips:
-                tmp_ip_file.write(ip + '\n')
-            tmp_ip_file.seek(0)
-
-    for hop, file in verify_seclast_hop_input_files.items():
-        # ping endpoints
-        temp_out = f"{output_dir}/presatverify_{0}_{uuid.uuid4().hex}.json"
-        cmd_list = [
-            scamper, "-O", "json", "-o", temp_out, "-p", str(pps), 
-            "-c", f"trace -P icmp-paris -S {src_ip} -q 1 -f {hop} -m {hop}", file
-        ]
-        proc = subprocess.Popen(cmd_list)
-        procs.append(proc)
-        verify_seclast_hop_output_files.append({
-            'seq': 0,
-            'hop': hop, 
-            'input_file': file,
-            'output_file': temp_out,
-        })
-        for proc in procs:
-            proc.wait()
-
-    verify_seclast_df = aggregate_data(verify_seclast_hop_output_files)
-    seclast_verified_df = df_sampled.merge(
-        verify_seclast_df[['dst', 'stop_reason', 'ip_at_ttl', 'probe_ttl', 'rtt']],
-        how='left',
-        on='dst',
-        suffixes=('_expected', '')
-    )
-    seclast_verified_df = seclast_verified_df.rename(columns={
-        'sec_last_hop': 'sec_last_hop_expected',
-        'probe_ttl': 'sec_last_hop',
-        'sec_last_ip': 'sec_last_ip_expected',
-        'ip_at_ttl': 'sec_last_ip',
-    })
-    seclast_verified_df['sec_last_hop'] = seclast_verified_df['sec_last_hop'].astype('Int64')
-
-    seclast_verified_df.to_csv(f'{output_file}_sec_last_actual_vs_expected.csv', index=None)
-    
-
-    ###########################################################################
-    # Find endpoints to ping
+    # Endpoint grouping
     ###########################################################################
     endpoints_grouped = (
         df_sampled
@@ -162,37 +158,31 @@ def modified_concurrent_ttl_ping_by_grouping(
         .apply(set)
         .reset_index()
     )
-    for index, row in endpoints_grouped.iterrows():
+
+    for _, row in endpoints_grouped.iterrows():
         ips = row['dst']
         hop = int(row['hop_count'])
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_ip_file:
-            endpoint_ip_input_file[hop] = tmp_ip_file.name
-            tmp_ip_file.flush()
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp:
+            endpoint_ip_input_file[hop] = tmp.name
             for ip in ips:
-                tmp_ip_file.write(ip + '\n')
-            tmp_ip_file.seek(0)
+                tmp.write(ip + '\n')
 
     ###########################################################################
-    # Find presat to ping
+    # Presat grouping
     ###########################################################################
     presat_endpoints = (
-        seclast_verified_df
+        df_sampled
         .groupby(['sec_last_ip', 'sec_last_hop'])['dst']
         .first()
         .reset_index()
     )
 
-    # get the hop_count for chosen pre-sat
-    presat_endpoints = (
-        presat_endpoints
-        .merge(
-            df_sampled[['dst', 'sec_last_ip', 'sec_last_hop', 'hop_count']],
-            how='left',
-            on=['dst', 'sec_last_ip', 'sec_last_hop']
-        )
+    presat_endpoints = presat_endpoints.merge(
+        df_sampled[['dst', 'sec_last_ip', 'sec_last_hop', 'hop_count']],
+        how='left',
+        on=['dst', 'sec_last_ip', 'sec_last_hop']
     )
 
-    # aggregate to run scamper on all ips with same sec_last_hop
     presat_endpoint_grouped = (
         presat_endpoints
         .groupby(['sec_last_hop', 'hop_count'])['dst']
@@ -200,81 +190,113 @@ def modified_concurrent_ttl_ping_by_grouping(
         .reset_index()
     )
 
-    for index, row in presat_endpoint_grouped.iterrows():
+    for _, row in presat_endpoint_grouped.iterrows():
         ips = row['dst']
         hop = int(row['sec_last_hop'])
         endpoint_hop = int(row['hop_count'])
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_ip_file:
-            presat_ip_input_file[(hop, endpoint_hop)] = tmp_ip_file.name
-            tmp_ip_file.flush()
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp:
+            presat_ip_input_file[(hop, endpoint_hop)] = tmp.name
             for ip in ips:
-                tmp_ip_file.write(ip + '\n')
-            tmp_ip_file.seek(0)
+                tmp.write(ip + '\n')
 
     ###########################################################################
-    # Ping
+    # Streaming Ping Loop
     ###########################################################################
-    endpoint_output_files = []
-    presat_output_files = []
-    procs = []
 
-    for seq in range(num_probes):
+    running_procs = []
+
+    aggregation_queue = queue.Queue()
+    stop_event = threading.Event()
+
+    endpoint_output_file = f"{output_file}_endpoint.csv"
+    sec_last_output_file = f"{output_file}_sec_last.csv"
+
+    endpoint_header_written = os.path.exists(endpoint_output_file)
+    seclast_header_written = os.path.exists(sec_last_output_file)
+
+    if num_probes == 0:
+        seq_iter = itertools.count()
+    else:
+        seq_iter = range(num_probes)
+
+    worker_thread = threading.Thread(target=aggregation_worker, daemon=True)
+    worker_thread.start()
+
+    for seq in seq_iter:
         start_time = time.time()
+
+        # Spawn endpoint probes
         for hop, file in endpoint_ip_input_file.items():
-            # ping endpoints
             if multiple_src_ips:
-                src_ip = src_ips[hop % len(src_ips)]
-            temp_endpoint_out = f"{output_dir}/endpoint_{seq}_{uuid.uuid4().hex}.json"
-            cmd_list = [
-                scamper, "-O", "json", "-o", temp_endpoint_out, "-p", str(pps), 
-                "-c", f"trace -P icmp-paris -S {src_ip} -q 1 -f {hop} -m {hop}", file
+                src_ip = SRC_IPS[hop % len(SRC_IPS)]
+
+            temp_out = f"{tmp_output_dir}/endpoint_{seq}_{uuid.uuid4().hex}.json"
+
+            cmd = [
+                scamper, "-O", "json", "-o", temp_out, "-p", str(pps),
+                "-c", f"trace -P icmp-paris -S {src_ip} -q 1 -f {hop} -m {hop}",
+                file
             ]
-            proc = subprocess.Popen(cmd_list)
-            procs.append(proc)
-            endpoint_output_files.append({
+
+            proc = subprocess.Popen(cmd)
+
+            running_procs.append({
+                'proc': proc,
+                'type': 'endpoint',
                 'seq': seq,
-                'hop': hop, 
-                'input_file': file,
-                'output_file': temp_endpoint_out,
+                'hop': hop,
+                'input_file': file,        # ← restore this
+                'output_file': temp_out,
             })
 
+        # Spawn presat probes
         for (hop, endpoint_hop), file in presat_ip_input_file.items():
-            # ping presats
             if multiple_src_ips:
-                src_ip = src_ips[endpoint_hop % len(src_ips)]
-            temp_sec_last_out = f"{output_dir}/seclast_{seq}_{uuid.uuid4().hex}.json"
-            cmd_list = [
-                scamper, "-O", "json", "-o", temp_sec_last_out, "-p", str(pps), 
-                "-c", f"trace -P icmp-paris -S {src_ip} -q 1 -f {hop} -m {hop}", file
+                src_ip = SRC_IPS[endpoint_hop % len(SRC_IPS)]
+
+            temp_out = f"{tmp_output_dir}/seclast_{seq}_{uuid.uuid4().hex}.json"
+
+            cmd = [
+                scamper, "-O", "json", "-o", temp_out, "-p", str(pps),
+                "-c", f"trace -P icmp-paris -S {src_ip} -q 1 -f {hop} -m {hop}",
+                file
             ]
-            proc = subprocess.Popen(cmd_list)
-            procs.append(proc)
-            presat_output_files.append({
+
+            proc = subprocess.Popen(cmd)
+
+            running_procs.append({
+                'proc': proc,
+                'type': 'seclast',
                 'seq': seq,
-                'hop': hop, 
-                'input_file': file,
-                'output_file': temp_sec_last_out,
+                'hop': hop,
+                'input_file': file,        # ← restore this
+                'output_file': temp_out,
             })
 
+        # Maintain probe rate
         to_sleep = wait_probe - (time.time() - start_time)
         if to_sleep > 0:
             time.sleep(to_sleep)
 
-    # Wait for all subprocesses to complete
-    for proc in procs:
-        proc.wait()
 
-    endpoint_df = aggregate_data(endpoint_output_files)
-    presat_df = aggregate_data(presat_output_files)
+        completed = [p for p in running_procs if p['proc'].poll() is not None]
 
-    endpoint_output_file = f"{output_file}_endpoint.csv"
-    endpoint_df.to_csv(endpoint_output_file, index=False)
-    
-    sec_last_output_file = f"{output_file}_sec_last.csv"
-    presat_df.to_csv(sec_last_output_file, index=False)
+        for p in completed:
+            aggregation_queue.put(p)
+            running_procs.remove(p)
 
     ###########################################################################
-    # Clean up files
+    # Final flush (for finite mode)
+    ###########################################################################
+    for p in running_procs:
+        p['proc'].wait()
+        aggregation_queue.put(p)
+
+    stop_event.set()
+    worker_thread.join()
+
+    ###########################################################################
+    # Cleanup input temp files
     ###########################################################################
     for file in endpoint_ip_input_file.values():
         os.remove(file)
@@ -282,55 +304,14 @@ def modified_concurrent_ttl_ping_by_grouping(
     for file in presat_ip_input_file.values():
         os.remove(file)
 
-    for file_info in verify_seclast_hop_output_files:
-        os.remove(file_info['output_file'])
-
-    for file_info in endpoint_output_files:
-        os.remove(file_info['output_file'])
-
-    for file_info in presat_output_files:
-        os.remove(file_info['output_file'])
-
-    ###########################################################################
-    # Print success rate
-    ###########################################################################
-    print(f"-----------------------------------------------------------------")
-    if grouping is not None:
-        print(f"{'/' + str(slash) + " with " if slash else ""} {sample_size} samples stats")
-
-    num_endpoint = endpoint_df['dst'].nunique()
-    num_seclast = presat_df['ip_at_ttl'].nunique()
-    print(f"num endpoints: {num_endpoint}")
-    print(f"num seclast: {num_seclast}")
-    df = (
-        endpoint_df
-        .merge(
-            presat_df[['seq', 'dst', 'ip_at_ttl', 'rtt']], 
-            how='left', 
-            on=['seq', 'dst'],
-            suffixes=['_endpoint', '_seclast'],
-        )
-    )
-    successful_df = df.dropna(subset=['rtt_endpoint', 'rtt_seclast'])
-    successful_counts = (
-        successful_df
-        .groupby('dst')['seq']
-        .nunique()
-        .reset_index(name='unique_seq_count')
-    )
-    successful_counts_desc = successful_counts['unique_seq_count'].describe()
-    print(successful_counts_desc)
-    print(f"-----------------------------------------------------------------")
-
-    return successful_counts_desc
-
+    print("Finished streaming aggregation.")
 
 def concurrent_ttl_ping_by_grouping(
         df: pd.DataFrame, asn: str, output_file: str, 
         wait_probe: int = 1, num_probes: int = 60,
         grouping: Grouping = None, sample_size: int = None,
         slash: int = None, multiple_src_ips: bool = False,
-        src_ip: str = src_ips[0],
+        src_ip: str = SRC_IPS[0],
 ):
     if grouping == Grouping.SUBNET and (sample_size is None or slash is None):
         raise ValueError("SUBNET grouping must be provided a 'sample_size' and 'slash'")
@@ -412,7 +393,7 @@ def concurrent_ttl_ping_by_grouping(
         for hop, file in endpoint_ip_input_file.items():
             # ping endpoints
             if multiple_src_ips:
-                src_ip = src_ips[hop % len(src_ips)]
+                src_ip = SRC_IPS[hop % len(SRC_IPS)]
             temp_endpoint_out = f"{output_dir}/endpoint_{seq}_{uuid.uuid4().hex}.json"
             cmd_list = [
                 scamper, "-O", "json", "-o", temp_endpoint_out, "-p", str(pps), 
@@ -430,7 +411,7 @@ def concurrent_ttl_ping_by_grouping(
         for (hop, endpoint_hop), file in presat_ip_input_file.items():
             # ping presats
             if multiple_src_ips:
-                src_ip = src_ips[endpoint_hop % len(src_ips)]
+                src_ip = SRC_IPS[endpoint_hop % len(SRC_IPS)]
             temp_sec_last_out = f"{output_dir}/seclast_{seq}_{uuid.uuid4().hex}.json"
             cmd_list = [
                 scamper, "-O", "json", "-o", temp_sec_last_out, "-p", str(pps), 
@@ -515,7 +496,7 @@ def concurrent_ttl_ping(
         output_file: str, 
         wait_probe: int = 1, 
         num_probes: int = 60,
-        src_ip: str = src_ips[0],
+        src_ip: str = SRC_IPS[0],
 ):
     endpoint_output_file = f"{output_file}_endpoint.csv"
     sec_last_output_file = f"{output_file}_sec_last.csv"
@@ -613,7 +594,7 @@ def round_robin_ttl_ping(
         wait_probe: int = 1, 
         num_probes: int = 60, 
         sec_last_only: bool =False,
-        src_ip: str = src_ips[0],
+        src_ip: str = SRC_IPS[0],
 ):
     endpoint_output_file = f"{output_file}_endpoint.csv"
     sec_last_output_file = f"{output_file}_sec_last.csv"
