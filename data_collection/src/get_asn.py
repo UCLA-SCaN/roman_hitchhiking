@@ -1,29 +1,27 @@
-import pandas as pd
 import requests
-from config import IPINFO_TOKEN
+import ipaddress
 
-def get_asn(ip: str, token: str=IPINFO_TOKEN) -> str:
-    req_str = f"https://api.ipinfo.io/lite/{ip}?token={token}"
-    response = requests.get(req_str)
-    data = response.json()
-    try: 
-        return data['asn']
-    except KeyError as e:  # Catch the specific exception if the key is missing
-        print(f"KeyError: The key 'asn' was not found for ip {ip}. Error: {e}: {data}")
-    except ValueError as e:  # You can still catch ValueError if needed, just for other cases
-        print(f"ValueError: {e}: {data}")
+def get_asn_prefixes(asn):
+    r = requests.get(f"https://ip.guide/as{asn}")
+    data = r.json()
 
-def get_all_asn(presat_ips: list) -> pd.DataFrame:
-    print(presat_ips)
-    asn_col = []
+    v4 = data["routes"].get("v4", [])
+    v6 = data["routes"].get("v6", [])
 
-    for ip in presat_ips:
-        asn = get_asn(ip)
-        asn_col.append(asn)
+    networks = [ipaddress.ip_network(prefix) for prefix in v4 + v6]
+    return networks
 
-    df = pd.DataFrame({
-        'ip': presat_ips,
-        'asn': asn_col,
-    })
-    
-    return df
+def ips_in_asn(ip_list, asn_num):
+    """
+    ip_list: list of IP strings
+    asn_num: asn number (e.g. 14593)
+    """
+    networks = get_asn_prefixes(asn_num)
+    matching_ips = []
+
+    for ip in ip_list:
+        ip_obj = ipaddress.ip_address(ip)
+        if any(ip_obj in net for net in networks):
+            matching_ips.append(ip)
+
+    return matching_ips

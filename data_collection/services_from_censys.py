@@ -1,6 +1,7 @@
 import pandas as pd
 from google.cloud import bigquery
 from typing import Union, List
+from config import BQ_PROJECT_ID
 
 CENSYS_UNIVERSAL_DATASET_BQ_TABLE = 'censys-io.universal_internet_dataset_v2.base'
 
@@ -22,7 +23,7 @@ def get_censys_exposed_services(asn: Union[int, List[int]], ipv: int = None, ) -
         asn_bq = f"autonomous_system.asn={asn}"
 
     try:
-        client = bigquery.Client()
+        client = bigquery.Client(project=BQ_PROJECT_ID)
         ip_col = 'host_identifier.ipv6' if ipv == 6 else 'host_identifier.ipv4'
         QUERY = (
             'SELECT DISTINCT '

@@ -1,15 +1,20 @@
 import json
 import pandas as pd
 from datetime import datetime, timezone
+from typing import Optional
 
-from src.get_asn import get_all_asn
+from src.get_asn import ips_in_asn
+from config import ASN
 
-def get_last_hops_from_paris_tr(file_path: str, asn: str) -> pd.DataFrame:
+def get_last_hops_from_paris_tr(
+        file_path: str, asn_num: Optional[str] = None,
+) -> pd.DataFrame:
     """
     Extract the hop number and IPs for the second-to-last and last hop in
     ICMP paris-traceroutes.
 
     :param file_path: file path to the .json formatted scamper trace output
+    :param asn_num: AS number (optional)
     :return: dataframe with the IPs and hop numbers of the second-to-last and
     last hops in the traceroutes as well as the stop reason.
     """
@@ -43,12 +48,11 @@ def get_last_hops_from_paris_tr(file_path: str, asn: str) -> pd.DataFrame:
     df = df[['dst', 'stop_reason', 'hop_count', 'sec_last_ip', 'sec_last_hop']]
 
     # ensure all second-to-last-hops are from correct ASN (eliminate traceroutes with little visibility)
-    sec_last_ips = list(df['sec_last_ip'].unique())
-    asn_df = get_all_asn(sec_last_ips)
-    print(asn_df)
-    asn_df = asn_df[asn_df['asn'] == asn]
-    validated_sec_last_ips = asn_df['ip'].tolist()
+    sec_last_ips = df['sec_last_ip'].dropna().unique().tolist()
+    if asn_num is None or asn_num == 'CONTROL':
+        return df
     
+    validated_sec_last_ips = ips_in_asn(sec_last_ips, asn_num)
     old_df_len = len(df)
     df = df[df['sec_last_ip'].isin(validated_sec_last_ips)]
     new_df_len = len(df)
@@ -208,7 +212,8 @@ def aggregate_data(files_info: list) -> pd.DataFrame:
             'probe_ttl',
             'rtt'])
 
-    all_dfs = pd.concat(dfs)
+    dfs = [df for df in dfs if df is not None and not df.empty]
+    all_dfs = pd.concat(dfs, ignore_index=True)
     all_dfs.astype({
         'date': 'str', 
         'seq': 'int32', 
