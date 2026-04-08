@@ -1,11 +1,17 @@
 import pandas as pd
 from google.cloud import bigquery
 from typing import Union, List
-from config import BQ_PROJECT_ID
+
+from config import DEFAULT_CONFIG_PATH, get_runtime_settings
 
 CENSYS_UNIVERSAL_DATASET_BQ_TABLE = 'censys-io.universal_internet_dataset_v2.base'
 
-def get_censys_exposed_services(asn: Union[int, List[int]], ipv: int = None, ) -> pd.DataFrame:
+def get_censys_exposed_services(
+    asn: Union[int, List[int]],
+    ipv: int = None,
+    bq_project_id: str | None = None,
+    config_path: str = DEFAULT_CONFIG_PATH,
+) -> pd.DataFrame:
     """
     Queries Censys for exposed services and returns the result as a dataframe.
     Assumes access to the Censys Universal Datasest in BigQuery
@@ -23,7 +29,8 @@ def get_censys_exposed_services(asn: Union[int, List[int]], ipv: int = None, ) -
         asn_bq = f"autonomous_system.asn={asn}"
 
     try:
-        client = bigquery.Client(project=BQ_PROJECT_ID)
+        project_id = bq_project_id or get_runtime_settings(config_path)["bq_project_id"]
+        client = bigquery.Client(project=project_id)
         ip_col = 'host_identifier.ipv6' if ipv == 6 else 'host_identifier.ipv4'
         QUERY = (
             'SELECT DISTINCT '

@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import shutil
 import subprocess
-from config import ASN, INPUT_IP_FILE
+from config import DEFAULT_CONFIG_PATH, get_runtime_settings
 
 from src.helper import get_day_directory
 from run_scamper import run_paris_trs
@@ -35,12 +35,29 @@ if __name__ == "__main__":
         default=None,
     )
 
+    parser.add_argument(
+        "--v6",
+        default=False,
+        help="Whether to use IPv6 addresses (from config) instead of IPv4."
+    )
+
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to the config.ini file.",
+    )
+
     args = parser.parse_args()
-    as_num = args.asn if args.asn else ASN[2:]
-    input_ip_file = args.ip_file if args.ip_file else INPUT_IP_FILE
+    settings = get_runtime_settings(args.config)
+    as_num = args.asn if args.asn else settings["asn"][2:]
+    input_ip_file = args.ip_file if args.ip_file else settings["input_ip_file"]
 
     # Output files
-    output_dir = get_day_directory()
+    output_dir = get_day_directory(
+        output_dir=settings["output_dir"],
+        config_path=args.config,
+    )
     info_file = os.path.join(
         output_dir, 
         'info.csv' if not args.name else f"{args.name}_info.csv",
@@ -60,7 +77,11 @@ if __name__ == "__main__":
 
     if not input_ip_file:
         from services_from_censys import get_censys_exposed_services
-        censys_df = get_censys_exposed_services(int(as_num))
+        censys_df = get_censys_exposed_services(
+            int(as_num),
+            bq_project_id=settings["bq_project_id"],
+            config_path=args.config,
+        )
         censys_df.to_csv(info_file, index=False)
         censys_df[['ip']].to_csv(ip_file, header=None, index=None)
     elif args.ip_file:
@@ -91,9 +112,11 @@ if __name__ == "__main__":
             output_dir,
             "sl_mapping.csv" if not args.name else f"{args.name}_sl_mapping.csv",
         ),
+        "--v6", "True" if args.v6 else "False",
     ]
     if args.name:
         cmd.extend(["--name", args.name])
+    cmd.extend(["--config", args.config])
     cmd.extend(["--log", "True"])
 
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)

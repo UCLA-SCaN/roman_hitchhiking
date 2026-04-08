@@ -7,14 +7,11 @@ import shutil
 import pandas as pd
 import uuid
 import subprocess
-import sys
-import tempfile
 import time
 
 from contextlib import contextmanager
+from config import DEFAULT_CONFIG_PATH, SRC_IPS, SRC_IPS_V6
 from parse_scamper import paris_tr_to_df
-from enum import Enum
-from config import SRC_IPS
 from src.helper import get_sl_files, get_time_bucket_file
 from src.rhh_processing import process_ttl_ping_bucket
 
@@ -33,16 +30,47 @@ def run_paris_trs(ip_file: str, output_file: str) -> pd.DataFrame:
     :param ip_file: file path string to a new-line delimited list of IPs to run traceroutes to
     :param output_file: file path string to .json file to output traceroute data
     """
+    import os as os_module
+    
+    # Check if input file exists and is not empty
+    if not os_module.path.exists(ip_file):
+        raise FileNotFoundError(f"Input IP file not found: {ip_file}")
+    
+    if os_module.path.getsize(ip_file) == 0:
+        raise ValueError(f"Input IP file is empty: {ip_file}")
 
-    cmd_str = f"{scamper} -O json -o {output_file} -p 200 -c \"trace -P icmp-paris -q 1 -g 15 \" {ip_file}"
-    print(cmd_str)
+    # Determine if we need sudo (running as non-root)
+    needs_sudo = os.getuid() != 0
+    sudo_prefix = "sudo " if needs_sudo else ""
+    
+    cmd_str = f"{sudo_prefix}{scamper} -O json -o {output_file} -p 200 -c \"trace -P icmp-paris -q 1 -g 15 \" {ip_file}"
+    print(f"Running scamper command: {cmd_str}")
+    
     try:
-        subprocess.run(
+        result = subprocess.run(
                 cmd_str, 
-                shell=True, 
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
         )
-    except ValueError:
-        raise Exception(f"Invalid command: {cmd_str}")
+        
+        if result.returncode != 0:
+            stderr_msg = result.stderr[:500] if result.stderr else "No stderr"
+            raise RuntimeError(
+                f"Scamper failed with exit code {result.returncode}. "
+                f"stderr: {stderr_msg}\n"
+                f"This often means: 1) Permission denied (needs root or CAP_NET_RAW), "
+                f"2) Invalid IPs in the input file, 3) Network issues."
+            )
+        
+        if result.stderr:
+            print(f"Scamper warnings/errors: {result.stderr}")
+            
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"Scamper command timed out after 300 seconds")
+    except ValueError as e:
+        raise ValueError(f"Invalid scamper command: {cmd_str}. Error: {e}")
 
     return paris_tr_to_df(output_file)
 
@@ -63,7 +91,7 @@ def find_successful_ips(
     print(f"BY DF: found number of successful sec_last_ips: {len(df)}")
     return df
 
-def get_ep_ips(ep_sl_file: str):
+def get_ep_ips(ep_sl_file: str, src_ips: list[str]):
     ep_ip_input_files = {}
 
     sl_df = pd.read_csv(ep_sl_file)
@@ -71,11 +99,11 @@ def get_ep_ips(ep_sl_file: str):
     print("*" * 80)
     print(f"endpoints: {len(eps)}")
 
-    for i, src_ip in enumerate(SRC_IPS):
+    for i, src_ip in enumerate(src_ips):
         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp:
             ep_ip_input_files[src_ip] = tmp.name
             for j, ip in enumerate(eps):
-                if j % len(SRC_IPS) == i:
+                if j % len(src_ips) == i:
                     tmp.write(ip + '\n')
             print(f"created temp file for endpoints: {tmp.name}")
 
@@ -84,7 +112,12 @@ def get_ep_ips(ep_sl_file: str):
 def get_sl_ips(mapping_file: str):
     sl_ip_input_files = {}
 
-    sl_ep_map_df = pd.read_csv(mapping_file)
+    try:
+        sl_ep_map_df = pd.read_csv(mapping_file)
+    except Exception as e:
+        print(f"Error reading mapping file {mapping_file}: {e}")
+        raise
+
     sl_ep_grouped = (
         sl_ep_map_df
         .groupby('sl_hop')['ep_ip']
@@ -119,6 +152,23 @@ def cleanup_temp_files(*file_maps):
                 print(
                     f"Warning: failed to delete {filepath}: {e}"
                 )
+
+
+def _get_sl_files_for_run(
+    name: str | None,
+    output_dir: str,
+    config_path: str,
+):
+    try:
+        return get_sl_files(
+            name,
+            output_dir=output_dir,
+            config_path=config_path,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+        return get_sl_files(name)
 
 
 def _append_valid_json_lines(source_path: str, dest_path: str) -> dict[str, int]:
@@ -256,7 +306,13 @@ def ttl_ping(
     name: str,
     sl_ep_map_file: str = None,
     ep_sl_file: str = None,
+    v6: bool = False,
+    config_path: str = DEFAULT_CONFIG_PATH,
+    src_ips: list[str] | None = None,
 ):
+    if src_ips is None:
+        src_ips = SRC_IPS_V6 if v6 else SRC_IPS
+
     with _ttl_ping_lock(output_dir, asn):
         tmp_output_dir = os.path.join(output_dir, f"tmp_output_{asn}")
         os.makedirs(tmp_output_dir, exist_ok=True)
@@ -276,7 +332,11 @@ def ttl_ping(
         #######################################################################
         # Import second-to-last IPs and endpoint IPs
         #######################################################################
-        sl_ep_map_file_tmp, ep_sl_file_tmp  = get_sl_files(name)
+        sl_ep_map_file_tmp, ep_sl_file_tmp  = _get_sl_files_for_run(
+            name,
+            output_dir,
+            config_path,
+        )
         if sl_ep_map_file is None:
             sl_ep_map_file = sl_ep_map_file_tmp
 
@@ -286,7 +346,7 @@ def ttl_ping(
         #######################################################################
         # Endpoint grouping
         #######################################################################
-        endpoint_ip_input_files = get_ep_ips(ep_sl_file)
+        endpoint_ip_input_files = get_ep_ips(ep_sl_file, src_ips=src_ips)
 
         #######################################################################
         # Presat grouping
@@ -310,7 +370,11 @@ def ttl_ping(
         try:
             while batch_idx < total_batches:
                 if infinite_mode:
-                    curr_sl_map_file, curr_ep_sl_file = get_sl_files(name)
+                    curr_sl_map_file, curr_ep_sl_file = _get_sl_files_for_run(
+                        name,
+                        output_dir,
+                        config_path,
+                    )
 
                     # if there is a new mapping file
                     if curr_sl_map_file != sl_ep_map_file:
@@ -331,7 +395,10 @@ def ttl_ping(
 
                         # create new temp scamper input files
                         seclast_ip_input_files = get_sl_ips(sl_ep_map_file)
-                        endpoint_ip_input_files = get_ep_ips(ep_sl_file)
+                        endpoint_ip_input_files = get_ep_ips(
+                            ep_sl_file,
+                            src_ips=src_ips,
+                        )
 
                 if infinite_mode:
                     this_batch = batch_size
@@ -402,7 +469,7 @@ def ttl_ping(
                 ################################################################
                 for hop, file in seclast_ip_input_files.items():
 
-                    src_ip = SRC_IPS[hop % len(SRC_IPS)]
+                    src_ip = src_ips[hop % len(src_ips)]
                     temp_out = f"{tmp_output_dir}/seclast_{hop}_{uuid.uuid4().hex}.json"
 
                     cmd = [

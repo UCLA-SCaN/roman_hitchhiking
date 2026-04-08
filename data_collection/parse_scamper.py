@@ -1,10 +1,35 @@
 import json
+import os
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
 
 from src.get_asn import ips_in_asn
-from config import ASN
+
+
+def read_jsonl_records(file_path: str, skip_corrupt: bool = True, max_reports: int = 10) -> list[dict]:
+    """Read JSON Lines while skipping corrupted records."""
+    records = []
+    bad_lines = 0
+    with open(file_path, 'rb') as f:
+        for lineno, raw_line in enumerate(f, 1):
+            line = raw_line.strip(b'\x00').strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                bad_lines += 1
+                if skip_corrupt:
+                    if bad_lines <= max_reports:
+                        print(f"Skipping corrupted JSON line {lineno} in {file_path}: {e}")
+                        print(line)
+                    continue
+                raise
+    if bad_lines and skip_corrupt:
+        print(f"Skipped {bad_lines} corrupted JSON lines in {file_path}")
+    return records
+
 
 def get_last_hops_from_paris_tr(
         file_path: str, asn_num: Optional[str] = None,
@@ -36,7 +61,20 @@ def get_last_hops_from_paris_tr(
         hops.sort(key=sort_hops)
         return hops[-2]['probe_ttl']
 
-    df = pd.read_json(file_path, lines=True)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Scamper output file not found: {file_path}")
+    
+    if os.path.getsize(file_path) == 0:
+        raise ValueError(f"Scamper output file is empty: {file_path}. "
+                        f"This usually means scamper failed to execute. "
+                        f"Common causes: 1) Missing permissions (needs root/CAP_NET_RAW), "
+                        f"2) Invalid IPs in input file, 3) Scamper not installed.")
+
+    records = read_jsonl_records(file_path, skip_corrupt=True)
+    if not records:
+        raise ValueError(f"No valid JSON records found in {file_path}")
+
+    df = pd.DataFrame.from_records(records)
     print('printing get_last_hops_from_paris_tr')
     print(df)
     print(df.columns)
@@ -67,7 +105,21 @@ def paris_tr_to_df(file_path: str) -> pd.DataFrame:
 
     :param file_path: file path of the scamper paris-traceroute json output
     """
-    df = pd.read_json(file_path, orient='records', lines=True)
+    # Check if file exists and is not empty
+    import os
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Scamper output file not found: {file_path}")
+    
+    if os.path.getsize(file_path) == 0:
+        raise ValueError(f"Scamper output file is empty: {file_path}. "
+                        f"This usually means scamper failed to execute or produced no output.")
+    
+    records = read_jsonl_records(file_path, skip_corrupt=True)
+    if not records:
+        raise ValueError(f"No valid JSON records found in {file_path}")
+
+    df = pd.DataFrame.from_records(records)
+    df = df[df['type'] == 'trace']
     df = df[df['type'] == 'trace']
 
     df_exploded = df.explode('hops').reset_index(drop=True)
