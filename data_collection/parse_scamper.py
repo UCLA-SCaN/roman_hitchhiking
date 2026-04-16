@@ -31,6 +31,7 @@ def read_jsonl_records(file_path: str, skip_corrupt: bool = True, max_reports: i
     return records
 
 
+PRE_SAT_HOP = 2
 def get_last_hops_from_paris_tr(
         file_path: str, asn_num: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -49,17 +50,17 @@ def get_last_hops_from_paris_tr(
 
     def get_sec_last_ip(hops):
         # If the list has fewer than two elements, return None
-        if not isinstance(hops, list) or len(hops) < 2:
+        if not isinstance(hops, list) or len(hops) < PRE_SAT_HOP:
             return None
         hops.sort(key=sort_hops)
-        return hops[-2]['addr']
+        return hops[int(PRE_SAT_HOP * -1)]['addr']
 
     def get_sec_last_probe_ttl(hops):
         # If the list has fewer than two elements, return None
-        if not isinstance(hops, list) or len(hops) < 2:
+        if not isinstance(hops, list) or len(hops) < PRE_SAT_HOP:
             return None
         hops.sort(key=sort_hops)
-        return hops[-2]['probe_ttl']
+        return hops[int(PRE_SAT_HOP * -1)]['probe_ttl']
 
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Scamper output file not found: {file_path}")

@@ -28,10 +28,10 @@ def main():
         required=False, default=None,
         help="Name of measurement",
     )
-    parser.add_argument("--input", help="Path to sec_to_last.csv")
-    parser.add_argument("--output", help="Output CSV file")
+    parser.add_argument("--input", type=str, help="Path to sec_to_last.csv")
+    parser.add_argument("--output", type=str, help="Output CSV file")
     parser.add_argument("--log", help="Output CSV file", default=False)
-    parser.add_argument("--v6", help="IPv6 addresses", default=False)
+    parser.add_argument("--v6", type=bool, help="IPv6 addresses", default=False)
     parser.add_argument(
         "--config",
         type=str,
@@ -42,6 +42,8 @@ def main():
     args = parser.parse_args()
     settings = get_runtime_settings(args.config)
     src_ips = settings["src_ips_v6"] if args.v6 else settings["src_ips"]
+    print(f"Using source IPs: {src_ips}")
+
     output_dir = settings["output_dir"]
 
     sec_last_path = args.input or find_latest_sec_last(

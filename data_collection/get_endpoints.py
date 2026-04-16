@@ -6,8 +6,6 @@ import subprocess
 from config import DEFAULT_CONFIG_PATH, get_runtime_settings
 
 from src.helper import get_day_directory
-from run_scamper import run_paris_trs
-from parse_scamper import get_last_hops_from_paris_tr
 
 DATA_COLLECTION_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(DATA_COLLECTION_DIR)
@@ -37,6 +35,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--v6",
+        type=bool,
         default=False,
         help="Whether to use IPv6 addresses (from config) instead of IPv4."
     )
@@ -74,32 +73,6 @@ if __name__ == "__main__":
         output_dir, 
         'sec_to_last.csv' if not args.name else f"{args.name}_sec_to_last.csv",
     )
-
-    if not input_ip_file:
-        from services_from_censys import get_censys_exposed_services
-        censys_df = get_censys_exposed_services(
-            int(as_num),
-            bq_project_id=settings["bq_project_id"],
-            config_path=args.config,
-        )
-        censys_df.to_csv(info_file, index=False)
-        censys_df[['ip']].to_csv(ip_file, header=None, index=None)
-    elif args.ip_file:
-        # copy the provided file to your working ip_file location
-        shutil.copy(args.ip_file, ip_file)
-    else:
-        raise ValueError("Must provide either --asn or --ip_file argument")
-    
-    run_paris_trs(
-        ip_file=ip_file, 
-        output_file=paris_trs_file,
-    )
-
-    sec_to_last_df = get_last_hops_from_paris_tr(
-        paris_trs_file, asn_num=as_num
-    )
-
-    sec_to_last_df.to_csv(sec_to_last_file, index=False)
     
     # get second-to-last IP mapping
     cmd = [
@@ -112,8 +85,12 @@ if __name__ == "__main__":
             output_dir,
             "sl_mapping.csv" if not args.name else f"{args.name}_sl_mapping.csv",
         ),
-        "--v6", "True" if args.v6 else "False",
     ]
+    if args.v6:
+        cmd.append("--v6")
+
+    print("Running command:", " ".join(cmd))
+
     if args.name:
         cmd.extend(["--name", args.name])
     cmd.extend(["--config", args.config])

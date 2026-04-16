@@ -1,3 +1,4 @@
+import argparse
 import urllib
 import pandas as pd
 import json
@@ -6,16 +7,31 @@ import os
 import subprocess
 
 from src.helper import get_day_directory
+from config import get_runtime_settings
 from run_scamper import run_paris_trs
 from parse_scamper import get_last_hops_from_paris_tr
 
 DATA_COLLECTION_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(DATA_COLLECTION_DIR)
 VENV_PYTHON = os.path.join(DATA_COLLECTION_DIR, "venv", "bin", "python3")
+RIPE_CONFIG_PATH = os.path.join(DATA_COLLECTION_DIR, "config_ripe.ini")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Collect RIPE Atlas anchor data")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=RIPE_CONFIG_PATH,
+        help="Path to the config.ini file.",
+    )
+    args = parser.parse_args()
+    settings = get_runtime_settings(args.config)
+
     # Output files
-    output_dir = get_day_directory()
+    output_dir = get_day_directory(
+        output_dir=settings["output_dir"],
+        config_path=args.config,
+    )
 
     ripe_info_file = os.path.join(output_dir, 'ripe_info.csv')
     ripe_ip_file = os.path.join(output_dir, 'ripe_ips.txt')
@@ -57,6 +73,7 @@ if __name__ == "__main__":
         "--name", "ripe",
         "--input", ripe_sec_to_last_file,
         "--output", ripe_sl_mapping_file,
+        "--config", args.config,
         "--log", "True",
     ]
 

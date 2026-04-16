@@ -1,3 +1,4 @@
+import tempfile
 import threading
 import queue
 import os
@@ -22,6 +23,7 @@ pps = 50000
 
 MAX_CONCURRENT = 1000   # tune this
 PROC_TIMEOUT = 10      # seconds before killing stuck scamper
+TIMEOUT = 1800
 
 def run_paris_trs(ip_file: str, output_file: str) -> pd.DataFrame:
     """
@@ -52,7 +54,7 @@ def run_paris_trs(ip_file: str, output_file: str) -> pd.DataFrame:
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                # timeout=TIMEOUT  # 30 minute timeout
         )
         
         if result.returncode != 0:
@@ -68,7 +70,7 @@ def run_paris_trs(ip_file: str, output_file: str) -> pd.DataFrame:
             print(f"Scamper warnings/errors: {result.stderr}")
             
     except subprocess.TimeoutExpired:
-        raise TimeoutError(f"Scamper command timed out after 300 seconds")
+        raise TimeoutError(f"Scamper command timed out after {TIMEOUT} seconds")
     except ValueError as e:
         raise ValueError(f"Invalid scamper command: {cmd_str}. Error: {e}")
 
@@ -263,6 +265,8 @@ def _maybe_enqueue_processing_job(
         "endpoint_path": endpoint_snapshot_path,
         "sec_last_path": sec_last_snapshot_path,
         "mapping_path": active_bucket["mapping_file"],
+        "allowed_sec_last_asn": active_bucket.get("asn"),
+        "config_path": active_bucket.get("config_path"),
         "cleanup_paths": [
             endpoint_snapshot_path,
             sec_last_snapshot_path,
@@ -282,6 +286,8 @@ def _background_processing_worker(processing_queue: "queue.Queue") -> None:
                 endpoint_path=job["endpoint_path"],
                 sec_last_path=job["sec_last_path"],
                 mapping_path=job["mapping_path"],
+                allowed_sec_last_asn=job.get("allowed_sec_last_asn"),
+                config_path=job.get("config_path", DEFAULT_CONFIG_PATH),
             )
             print(
                 "Processed filtered ttl_ping bucket: "
@@ -438,6 +444,8 @@ def ttl_ping(
                         "endpoint_output_file": endpoint_output_file,
                         "sec_last_output_file": sec_last_output_file,
                         "mapping_file": ep_sl_file,
+                        "asn": asn,
+                        "config_path": config_path,
                         "has_data": False,
                     }
 
