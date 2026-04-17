@@ -68,7 +68,7 @@ def main():
     agg_df['num_dst'] = agg_df['dst'].apply(len)
     max_len = agg_df['num_dst'].max()
 
-    for i in range(max_len):
+    for i in range(int(max_len)):
         if args.log:
             print(f"\n=== ITERATION {i} ===")
 
@@ -124,7 +124,7 @@ def main():
 
             cmd = [
                 scamper, "-O", "json", "-o", temp_out, "-p", str(pps),
-                "-c", f"ping -S {src_ip} -c {this_batch} -i {wait_probe} -m {hop}",
+                "-c", f"ping -S {src_ip} -c {this_batch} -i {wait_probe} -m {int(hop)}",
                 input_file
             ]
 

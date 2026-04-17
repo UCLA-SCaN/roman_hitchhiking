@@ -6,7 +6,7 @@ import json
 import re
 
 from config import get_runtime_settings
-from src.helper import get_day_directory
+from src.helper import ensure_trailing_newline, get_day_directory
 from run_scamper import run_paris_trs
 from parse_scamper import get_last_hops_from_paris_tr
 
@@ -64,6 +64,7 @@ if __name__ == "__main__":
     with open(ripe_starlink_all_ip_file, 'w') as f:
         for ip in ips:
             f.write(ip + '\n')
+    ensure_trailing_newline(ripe_starlink_all_ip_file)
 
     # Ping all IPs concurrently using scamper for 15 seconds each (15 pings with 1s interval)
     print("Running scamper to ping all IPs...")
@@ -98,6 +99,7 @@ if __name__ == "__main__":
         for ip in sorted(responsive_ips):
             f.write(ip + '\n')
             print(ip)
+    ensure_trailing_newline(ripe_starlink_ip_file)
 
     ###########################################################################
     # Paris Traceroutes and Second-to-Last Mapping
@@ -108,7 +110,7 @@ if __name__ == "__main__":
     )
 
     sec_to_last_df = get_last_hops_from_paris_tr(
-        ripe_starlink_paris_trs_file, asn_num=settings["asn"][2:]
+        ripe_starlink_paris_trs_file, asn_num=settings["asn"][2:], sat_hop=settings["sat_hop"]
     )
 
     sec_to_last_df.to_csv(ripe_starlink_sec_to_last_file, index=False)
@@ -126,6 +128,3 @@ if __name__ == "__main__":
     ]
 
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)
-
-    
-    

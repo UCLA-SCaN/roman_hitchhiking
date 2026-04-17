@@ -7,6 +7,7 @@ import os
 import subprocess
 
 from src.helper import get_day_directory
+from src.helper import ensure_trailing_newline
 from config import get_runtime_settings
 from run_scamper import run_paris_trs
 from parse_scamper import get_last_hops_from_paris_tr
@@ -52,6 +53,7 @@ if __name__ == "__main__":
         index=False,
         header=False,
     )
+    ensure_trailing_newline(ripe_ip_file)
 
     # Run Paris Traceroutes to RIPE Atlas anchors
     run_paris_trs(
@@ -60,7 +62,7 @@ if __name__ == "__main__":
     )
 
     sec_to_last_df = get_last_hops_from_paris_tr(
-        ripe_paris_trs_file, asn_num='CONTROL'
+        ripe_paris_trs_file, asn_num='CONTROL', sat_hop=settings["sat_hop"]
     )
 
     sec_to_last_df.to_csv(ripe_sec_to_last_file, index=False)

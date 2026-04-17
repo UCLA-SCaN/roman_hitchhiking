@@ -1,4 +1,5 @@
 import json
+import ipaddress
 import os
 import pandas as pd
 from datetime import datetime, timezone
@@ -31,9 +32,8 @@ def read_jsonl_records(file_path: str, skip_corrupt: bool = True, max_reports: i
     return records
 
 
-PRE_SAT_HOP = 2
 def get_last_hops_from_paris_tr(
-        file_path: str, asn_num: Optional[str] = None,
+        file_path: str, asn_num: Optional[str] = None, sat_hop: int = -2,
 ) -> pd.DataFrame:
     """
     Extract the hop number and IPs for the second-to-last and last hop in
@@ -48,19 +48,19 @@ def get_last_hops_from_paris_tr(
     def sort_hops(e):
         return e['probe_ttl']
 
-    def get_sec_last_ip(hops):
+    def get_sec_last_ip(hops, sat_hop: int = -2):
         # If the list has fewer than two elements, return None
-        if not isinstance(hops, list) or len(hops) < PRE_SAT_HOP:
+        if not isinstance(hops, list) or len(hops) < abs(sat_hop):
             return None
         hops.sort(key=sort_hops)
-        return hops[int(PRE_SAT_HOP * -1)]['addr']
+        return hops[int(sat_hop)]['addr']
 
-    def get_sec_last_probe_ttl(hops):
+    def get_sec_last_probe_ttl(hops, sat_hop: int = -2):
         # If the list has fewer than two elements, return None
-        if not isinstance(hops, list) or len(hops) < PRE_SAT_HOP:
+        if not isinstance(hops, list) or len(hops) < abs(sat_hop):
             return None
         hops.sort(key=sort_hops)
-        return hops[int(PRE_SAT_HOP * -1)]['probe_ttl']
+        return hops[int(sat_hop)]['probe_ttl']
 
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Scamper output file not found: {file_path}")
@@ -82,13 +82,16 @@ def get_last_hops_from_paris_tr(
 
     # filter for only 'trace' data
     df = df[df["type"] == "trace"]
-    df['sec_last_ip'] = df['hops'].apply(lambda x: get_sec_last_ip(x))
-    df['sec_last_hop'] = df['hops'].apply(lambda x: get_sec_last_probe_ttl(x))
+    df['sec_last_ip'] = df['hops'].apply(lambda x: get_sec_last_ip(x, sat_hop=sat_hop))
+    df['sec_last_hop'] = df['hops'].apply(lambda x: get_sec_last_probe_ttl(x, sat_hop=sat_hop))
     df = df[['dst', 'stop_reason', 'hop_count', 'sec_last_ip', 'sec_last_hop']]
 
     # ensure all second-to-last-hops are from correct ASN (eliminate traceroutes with little visibility)
     sec_last_ips = df['sec_last_ip'].dropna().unique().tolist()
-    if asn_num is None or asn_num == 'CONTROL':
+
+    is_v6 = ipaddress.ip_address(df['dst'].iloc[0]).version == 6
+
+    if asn_num is None or asn_num == "CONTROL" or is_v6:
         return df
     
     validated_sec_last_ips = ips_in_asn(sec_last_ips, asn_num)

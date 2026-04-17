@@ -31,6 +31,7 @@ def get_runtime_settings(config_path: str = DEFAULT_CONFIG_PATH) -> dict:
         "bq_project_id": config.get("bigquery", "project_id"),
         "input_ip_file": config.get("input", "input_ip_file", fallback=None),
         "output_dir": config.get("output", "output_dir"),
+        "sat_hop": config.getint("traceroute", "sat_hop", fallback=-2),
     }
 
 
@@ -58,3 +59,6 @@ INPUT_IP_FILE = _settings["input_ip_file"]
 
 # ---------- OUTPUT ----------
 OUTPUT_DIR = _settings["output_dir"]
+
+# ---------- TRACEROUTE ----------
+SAT_HOP = _settings["sat_hop"]

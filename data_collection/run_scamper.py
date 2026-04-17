@@ -13,7 +13,7 @@ import time
 from contextlib import contextmanager
 from config import DEFAULT_CONFIG_PATH, SRC_IPS, SRC_IPS_V6
 from parse_scamper import paris_tr_to_df
-from src.helper import get_sl_files, get_time_bucket_file
+from src.helper import ensure_trailing_newline, get_sl_files, get_time_bucket_file
 from src.rhh_processing import process_ttl_ping_bucket
 
 # depending on the pps required you may need to download and build from 
@@ -41,11 +41,13 @@ def run_paris_trs(ip_file: str, output_file: str) -> pd.DataFrame:
     if os_module.path.getsize(ip_file) == 0:
         raise ValueError(f"Input IP file is empty: {ip_file}")
 
+    ensure_trailing_newline(ip_file)
+
     # Determine if we need sudo (running as non-root)
     needs_sudo = os.getuid() != 0
     sudo_prefix = "sudo " if needs_sudo else ""
     
-    cmd_str = f"{sudo_prefix}{scamper} -O json -o {output_file} -p 200 -c \"trace -P icmp-paris -q 1 -g 15 \" {ip_file}"
+    cmd_str = f"{sudo_prefix}{scamper} -O json -o {output_file} -p 200 -c \"trace -P icmp-paris -q 1 -g 15 \" -f {ip_file}"
     print(f"Running scamper command: {cmd_str}")
     
     try:
@@ -107,6 +109,7 @@ def get_ep_ips(ep_sl_file: str, src_ips: list[str]):
             for j, ip in enumerate(eps):
                 if j % len(src_ips) == i:
                     tmp.write(ip + '\n')
+            ensure_trailing_newline(tmp.name)
             print(f"created temp file for endpoints: {tmp.name}")
 
     return ep_ip_input_files
@@ -137,6 +140,7 @@ def get_sl_ips(mapping_file: str):
             sl_ip_input_files[hop] = tmp.name
             for ip in ips:
                 tmp.write(ip + '\n')
+            ensure_trailing_newline(tmp.name)
 
     return sl_ip_input_files
 
@@ -482,7 +486,7 @@ def ttl_ping(
 
                     cmd = [
                         scamper, "-O", "json", "-o", temp_out, "-p", str(pps),
-                        "-c", f"ping -S {src_ip} -c {this_batch} -i {wait_probe} -m {hop}",
+                        "-c", f"ping -S {src_ip} -c {this_batch} -i {wait_probe} -m {int(hop)}",
                         file
                     ]
 

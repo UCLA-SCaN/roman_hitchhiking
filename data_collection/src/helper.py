@@ -151,3 +151,22 @@ def find_latest_sec_last(output_dir: str, filename: str):
         # Stop searching too far back
         if days_back > 7:
             return None
+
+
+def ensure_trailing_newline(file_path: str) -> None:
+    """
+    Ensure a text file ends with a newline so tools that expect
+    line-delimited input read the last record reliably.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(file_path)
+
+    with open(file_path, "a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        if size == 0:
+            return
+
+        handle.seek(-1, os.SEEK_END)
+        if handle.read(1) != b"\n":
+            handle.write(b"\n")
