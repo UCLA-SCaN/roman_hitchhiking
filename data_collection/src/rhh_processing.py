@@ -1,6 +1,7 @@
 import json
 import ipaddress
 import os
+from collections import defaultdict
 from typing import Iterable
 
 import numpy as np
@@ -27,6 +28,13 @@ def _rtt_agg(values: pd.Series) -> float:
     if len(non_na) == 0:
         return np.nan
     return float(non_na.median())
+
+
+def _median_rtt(values: Iterable[float | None]) -> float:
+    non_na = [value for value in values if value is not None and not pd.isna(value)]
+    if not non_na:
+        return np.nan
+    return float(np.median(non_na))
 
 
 def _iter_ping_rows(path: str) -> Iterable[dict]:
@@ -62,26 +70,41 @@ def _iter_ping_rows(path: str) -> Iterable[dict]:
 
 
 def parse_ping_file(path: str) -> pd.DataFrame:
-    rows = list(_iter_ping_rows(path))
+    rows = [
+        (row["ip"], row["timestamp"], row["rtt"])
+        for row in _iter_ping_rows(path)
+    ]
     if not rows:
         return pd.DataFrame(columns=["ip", "timestamp", "rtt"])
 
     return (
-        pd.DataFrame(rows, columns=["ip", "timestamp", "rtt"])
+        pd.DataFrame.from_records(rows, columns=["ip", "timestamp", "rtt"])
         .sort_values(["ip", "timestamp"])
         .reset_index(drop=True)
     )
 
 
 def aggregate_ping_file(path: str) -> pd.DataFrame:
-    df = parse_ping_file(path)
-    if df.empty:
+    grouped_rows: dict[tuple[int | None, str | None], list[float | None]] = defaultdict(list)
+
+    for row in _iter_ping_rows(path):
+        grouped_rows[(row["timestamp"], row["ip"])].append(row["rtt"])
+
+    if not grouped_rows:
         return pd.DataFrame(columns=["timestamp", "ip", "rtt"])
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+    records = []
+    for (timestamp, ip), rtts in grouped_rows.items():
+        records.append(
+            (
+                pd.to_datetime(timestamp, unit="s"),
+                ip,
+                _median_rtt(rtts),
+            )
+        )
+
     return (
-        df.groupby(["timestamp", "ip"], as_index=False)
-        .agg({"rtt": _rtt_agg})
+        pd.DataFrame.from_records(records, columns=["timestamp", "ip", "rtt"])
         .sort_values(["timestamp", "ip"])
         .reset_index(drop=True)
     )
@@ -226,25 +249,23 @@ def clean_merged_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     cleaned = df.copy()
 
-    sl_ips_nan = (
-        cleaned.groupby("sl_ip")["sl_rtt"]
-        .apply(lambda x: x.isna().all())
-        .reset_index()
-    )
-    unresponsive_sl_ips = sl_ips_nan[sl_ips_nan["sl_rtt"]]["sl_ip"].dropna().tolist()
-    if unresponsive_sl_ips:
-        cleaned = cleaned[~cleaned["sl_ip"].isin(unresponsive_sl_ips)].copy()
+    responsive_sl_ips = cleaned.loc[
+        cleaned["sl_rtt"].notna(),
+        "sl_ip",
+    ].dropna().unique()
+    if len(responsive_sl_ips) != cleaned["sl_ip"].nunique(dropna=True):
+        cleaned = cleaned[
+            cleaned["sl_ip"].isna() | cleaned["sl_ip"].isin(responsive_sl_ips)
+        ].copy()
         if cleaned.empty:
             return cleaned.reset_index(drop=True)
 
-    no_success_ips = (
-        cleaned.groupby("ep_ip")["label"]
-        .apply(lambda x: (x != "success").all())
-        .reset_index()
-    )
-    no_success_ips = no_success_ips[no_success_ips["label"]]["ep_ip"].dropna().tolist()
-    if no_success_ips:
-        cleaned = cleaned[~cleaned["ep_ip"].isin(no_success_ips)].copy()
+    successful_ep_ips = cleaned.loc[
+        cleaned["label"] == "success",
+        "ep_ip",
+    ].dropna().unique()
+    if len(successful_ep_ips) != cleaned["ep_ip"].nunique(dropna=True):
+        cleaned = cleaned[cleaned["ep_ip"].isin(successful_ep_ips)].copy()
 
     return cleaned.reset_index(drop=True)
 
@@ -274,6 +295,7 @@ def process_ttl_ping_bucket(
     if filtered_output_path is None:
         filtered_output_path = get_processed_output_path(endpoint_path)
 
+    print(f"[PROCESS] Processing bucket with endpoint: {endpoint_path}, sec_last: {sec_last_path}, mapping: {mapping_path}")
     merged_df = merge_ttl_ping_outputs(
         endpoint_path,
         sec_last_path,
@@ -284,5 +306,6 @@ def process_ttl_ping_bucket(
     cleaned_df = clean_merged_dataframe(merged_df)
 
     cleaned_df.to_csv(filtered_output_path, index=False)
+    print(f"[PROCESS] Finished processing. Output saved to {filtered_output_path}")
 
     return filtered_output_path
