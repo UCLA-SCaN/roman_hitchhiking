@@ -16,6 +16,40 @@ REPO_ROOT = os.path.dirname(DATA_COLLECTION_DIR)
 VENV_PYTHON = os.path.join(DATA_COLLECTION_DIR, "venv", "bin", "python3")
 PPS = 50000
 RATES = [1, 0.5, 0.2, 0.1]
+MAX_PROBE_IPS_PER_FILE = 5000
+
+
+def split_ip_file_into_batches(
+    input_ip_file: str,
+    output_dir: str,
+    batch_size: int = MAX_PROBE_IPS_PER_FILE,
+) -> list[Path]:
+    input_path = Path(input_ip_file)
+    batch_dir = Path(output_dir) / "test_probes" / "ip_batches"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    ips = [
+        line.strip()
+        for line in input_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not ips:
+        return []
+
+    batch_files: list[Path] = []
+    total_batches = (len(ips) + batch_size - 1) // batch_size
+
+    for batch_index, start in enumerate(range(0, len(ips), batch_size), start=1):
+        batch_ips = ips[start:start + batch_size]
+        batch_file = batch_dir / f"{input_path.stem}_part_{batch_index:04d}.txt"
+        batch_file.write_text("\n".join(batch_ips) + "\n", encoding="utf-8")
+        batch_files.append(batch_file)
+
+    print(
+        f"Split {len(ips)} IPs into {total_batches} batch file(s) "
+        f"with up to {batch_size} IPs each"
+    )
+    return batch_files
 
 def run_test_probes(input_ip_file: str, output_dir: str, name: str | None) -> list[Path]:
     ensure_trailing_newline(input_ip_file)
@@ -59,11 +93,22 @@ def filter_censys_ips(
     output_dir: str,
     name: str | None,
 ) -> list[str]:
-    generated_output_files = run_test_probes(
+    batch_files = split_ip_file_into_batches(
         input_ip_file=raw_ip_file,
         output_dir=output_dir,
-        name=name,
     )
+    generated_output_files: list[Path] = []
+
+    for batch_index, batch_file in enumerate(batch_files, start=1):
+        print(f"Running test probes for batch {batch_index}/{len(batch_files)}: {batch_file}")
+        generated_output_files.extend(
+            run_test_probes(
+                input_ip_file=str(batch_file),
+                output_dir=output_dir,
+                name=name,
+            )
+        )
+
     rows = build_dataframe(generated_output_files)
     ips_to_keep = compute_ips_to_keep(rows)
     write_ips_to_csv(ips_to_keep, Path(filtered_ip_file))
@@ -144,6 +189,7 @@ if __name__ == "__main__":
             bq_project_id=settings["bq_project_id"],
             config_path=args.config,
         )
+        print(f"Original number of IPs found from Censys: {len(censys_df)}")
         censys_df.to_csv(info_file, index=False)
         censys_df[['ip']].to_csv(raw_censys_ip_file, header=None, index=None)
         ensure_trailing_newline(raw_censys_ip_file)
@@ -153,7 +199,7 @@ if __name__ == "__main__":
             output_dir=output_dir,
             name=args.name,
         )
-        print(f"Filtered Censys IPs from {len(censys_df)} down to {len(ips_to_keep)}")
+        print(f"Filtered number of IPs to keep: {len(ips_to_keep)}")
     elif input_ip_file:
         # copy the provided file to your working ip_file location
         shutil.copy(input_ip_file, ip_file)
