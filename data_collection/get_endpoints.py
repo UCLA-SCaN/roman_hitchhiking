@@ -3,15 +3,72 @@ import pandas as pd
 import os
 import shutil
 import subprocess
+from pathlib import Path
 from config import DEFAULT_CONFIG_PATH, get_runtime_settings
 
 from parse_scamper import get_last_hops_from_paris_tr
 from run_scamper import run_paris_trs
 from src.helper import ensure_trailing_newline, get_day_directory
+from src.probe_analysis import build_dataframe, compute_ips_to_keep, write_ips_to_csv
 
 DATA_COLLECTION_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(DATA_COLLECTION_DIR)
 VENV_PYTHON = os.path.join(DATA_COLLECTION_DIR, "venv", "bin", "python3")
+PPS = 50000
+RATES = [1, 0.5, 0.2, 0.1]
+
+def run_test_probes(input_ip_file: str, output_dir: str, name: str | None) -> list[Path]:
+    ensure_trailing_newline(input_ip_file)
+
+    input_path = Path(input_ip_file)
+    probe_output_dir = Path(output_dir) / "test_probes"
+    probe_output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_stem = input_path.stem if not name else f"{name}_{input_path.stem}"
+    generated_output_files: list[Path] = []
+
+    for rate in RATES:
+        count = int(10 / rate)
+        rate_str = str(rate)
+        output_file = probe_output_dir / f"{output_stem}_rate_{rate_str}_test_probe.json"
+
+        cmd = [
+            "sudo",
+            "scamper",
+            "-O",
+            "json",
+            "-o",
+            str(output_file),
+            "-p",
+            str(PPS),
+            "-c",
+            f"ping -c {count} -i {rate}",
+            str(input_path),
+        ]
+
+        print("Running probe command:", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+        generated_output_files.append(output_file)
+
+    return generated_output_files
+
+
+def filter_censys_ips(
+    raw_ip_file: str,
+    filtered_ip_file: str,
+    output_dir: str,
+    name: str | None,
+) -> list[str]:
+    generated_output_files = run_test_probes(
+        input_ip_file=raw_ip_file,
+        output_dir=output_dir,
+        name=name,
+    )
+    rows = build_dataframe(generated_output_files)
+    ips_to_keep = compute_ips_to_keep(rows)
+    write_ips_to_csv(ips_to_keep, Path(filtered_ip_file))
+    ensure_trailing_newline(filtered_ip_file)
+    return ips_to_keep
 
 if __name__ == "__main__":
 
@@ -67,6 +124,10 @@ if __name__ == "__main__":
         output_dir, 
         'ips.txt' if not args.name else f"{args.name}_ips.txt",
     )
+    raw_censys_ip_file = os.path.join(
+        output_dir,
+        'censys_ips.txt' if not args.name else f"{args.name}_censys_ips.txt",
+    )
     paris_trs_file = os.path.join(
         output_dir, 
         'paris_trs.json' if not args.name else f"{args.name}_paris_trs.json",
@@ -84,11 +145,18 @@ if __name__ == "__main__":
             config_path=args.config,
         )
         censys_df.to_csv(info_file, index=False)
-        censys_df[['ip']].to_csv(ip_file, header=None, index=None)
-        ensure_trailing_newline(ip_file)
-    elif args.ip_file:
+        censys_df[['ip']].to_csv(raw_censys_ip_file, header=None, index=None)
+        ensure_trailing_newline(raw_censys_ip_file)
+        ips_to_keep = filter_censys_ips(
+            raw_ip_file=raw_censys_ip_file,
+            filtered_ip_file=ip_file,
+            output_dir=output_dir,
+            name=args.name,
+        )
+        print(f"Filtered Censys IPs from {len(censys_df)} down to {len(ips_to_keep)}")
+    elif input_ip_file:
         # copy the provided file to your working ip_file location
-        shutil.copy(args.ip_file, ip_file)
+        shutil.copy(input_ip_file, ip_file)
         ensure_trailing_newline(ip_file)
     else:
         raise ValueError("Must provide either --asn or --ip_file argument")
