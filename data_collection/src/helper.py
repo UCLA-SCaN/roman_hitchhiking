@@ -1,6 +1,6 @@
 import os
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 try:
     from ..config import OUTPUT_DIR, DEFAULT_CONFIG_PATH, get_runtime_settings
@@ -107,9 +107,14 @@ def get_sl_files(
         f"{name}_sec_to_last.csv" if name else "sec_to_last.csv"
     )
 
-def get_time_bucket_file(base_output_dir: str, data_dir: str, type: str) -> str:
-    now = datetime.utcnow()
-    minute_bucket = (now.minute // 5) * 5
+def get_time_bucket_file(
+    base_output_dir: str,
+    data_dir: str,
+    type: str,
+    bucket_time: datetime | None = None,
+) -> str:
+    now = bucket_time or datetime.now(UTC)
+    minute_bucket = (now.minute // 10) * 10
     bucket_time = now.replace(minute=minute_bucket, second=0, microsecond=0)
 
     year = bucket_time.strftime("%Y")

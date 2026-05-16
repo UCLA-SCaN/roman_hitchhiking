@@ -3,6 +3,9 @@ import argparse
 from config import DEFAULT_CONFIG_PATH, get_runtime_settings
 from run_scamper import ttl_ping
 
+"""
+Runs Roman HitchHiking
+"""
 
 def run_roman_hitchhiking(
     name: str | None,
@@ -13,6 +16,7 @@ def run_roman_hitchhiking(
     v6: bool = False,
     config_path: str = DEFAULT_CONFIG_PATH,
     src_ips: list[str] | None = None,
+    skip_processing: bool = False,
 ) -> None:
     ttl_ping_kwargs = {
         "asn": asn,
@@ -20,6 +24,7 @@ def run_roman_hitchhiking(
         "num_probes": num_probes,
         "output_dir": output_dir,
         "name": name,
+        "skip_processing": skip_processing,
     }
     if v6:
         ttl_ping_kwargs["v6"] = v6
@@ -71,6 +76,12 @@ if __name__ == "__main__":
         help="Whether to use IPv6 addresses (from config) instead of IPv4."
     )
 
+    parser.add_argument(
+        "--skip-processing",
+        action="store_true",
+        help="Collect raw scamper output only and skip merged_filtered processing.",
+    )
+
     args = parser.parse_args()
     settings = get_runtime_settings(args.config)
 
@@ -83,4 +94,5 @@ if __name__ == "__main__":
         v6=args.v6,
         config_path=args.config,
         src_ips=settings["src_ips_v6"] if args.v6 else settings["src_ips"],
+        skip_processing=args.skip_processing,
     )
